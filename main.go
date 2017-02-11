@@ -13,9 +13,9 @@ import (
 )
 
 const listenPort = ":8080"
-const overhead = 25
+const overhead = 25 //responsible for the last step of merging the results
 const queryKey = "u"
-const timeout = (500 - overhead) * time.Millisecond
+const timeout = (500 - overhead) * time.Millisecond //subtract the overhead to make sure 500ms requirement is met
 
 var ( //custom errors
 	errRequestTookTooLong = errors.New("Request took too long to finish")
@@ -24,7 +24,8 @@ var ( //custom errors
 	errServerUnavailable  = errors.New("Endpoint is unavailable")
 )
 
-// Aggregator control mechanism - thread safe
+// Aggregator is a core component control mechanism - thread safe
+// protects from data races
 type Aggregator struct {
 	data *Data
 	sync.Mutex
@@ -83,6 +84,8 @@ func handler(res http.ResponseWriter, req *http.Request) {
 	aggr := &Aggregator{
 		data: &Data{make([]int, 0)},
 	}
+	// context here is used in conjuction with requests
+	// to kill timed out requests and limit the lifespan of this function
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -98,13 +101,14 @@ func handler(res http.ResponseWriter, req *http.Request) {
 			aggr.Add(1)
 			go func() {
 				defer aggr.Done()
-				aggr.fetchData(ctx, endpoint)
+				aggr.fetchData(ctx, endpoint) //fetch the data from endpoint
 			}()
 		}
 		aggr.Wait()
 		done <- struct{}{}
 	}()
 
+	// block until either timeout or all requests are finished
 	select {
 	case <-ctx.Done():
 		log.Printf("one of the requests timed out!")
@@ -117,13 +121,16 @@ func handler(res http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(res).Encode(aggr.set())
 }
 
+// fetchData method is responsible for getting the data and adding it to
+// the data field via method receiver. It also returns custom error for ease of testing
 func (a *Aggregator) fetchData(ctx context.Context, endpoint *url.URL) error {
 	req, err := http.NewRequest("GET", endpoint.String(), nil)
 	if err != nil {
 		log.Printf("[Error] Endpoint request creation failed: %v\n", err)
 		return errUnknown
 	}
-
+	// pass the context to the http client
+	// only possible since go1.7
 	res, err := http.DefaultClient.Do(req.WithContext(ctx))
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
