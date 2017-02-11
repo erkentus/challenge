@@ -48,7 +48,7 @@ func (a *Aggregator) set() *Data {
 	defer a.Unlock()
 
 	if len(a.data.Numbers) == 0 {
-		return &Data{}
+		return &Data{Numbers: []int{}}
 	}
 	sort.Ints(a.data.Numbers)
 
@@ -86,20 +86,31 @@ func handler(res http.ResponseWriter, req *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	values := req.URL.Query()[queryKey]
-	for _, val := range values {
-		endpoint, err := url.ParseRequestURI(val)
-		if err != nil {
-			log.Printf("[Warning] Passed URL cannot be parsed: %v. Ignoring\n", err)
-			continue
+	done := make(chan struct{})
+	go func() {
+		values := req.URL.Query()[queryKey]
+		for _, val := range values {
+			endpoint, err := url.ParseRequestURI(val)
+			if err != nil {
+				log.Printf("[Warning] Passed URL cannot be parsed: %v. Ignoring\n", err)
+				continue
+			}
+			aggr.Add(1)
+			go func() {
+				defer aggr.Done()
+				aggr.fetchData(ctx, endpoint)
+			}()
 		}
-		aggr.Add(1)
-		go func() {
-			defer aggr.Done()
-			aggr.fetchData(ctx, endpoint)
-		}()
+		aggr.Wait()
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-ctx.Done():
+		log.Printf("one of the requests timed out!")
+	case <-done:
+		log.Printf("all endpoints are processed!")
 	}
-	aggr.Wait()
 
 	res.Header().Set("Content-Type", "application/json")
 	res.WriteHeader(200)
