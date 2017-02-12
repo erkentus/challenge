@@ -31,24 +31,23 @@ func main() {
 
 	for i := 0; i < numQueries; i++ {
 		queryURL := fmt.Sprintf("%s?", server)
-		numEndpoints := rand.Intn(100)
+		numEndpoints := rand.Intn(1000)
 		for j := 0; j < numEndpoints; j++ {
 			endpoint := rand.Intn(4)
 			queryURL = fmt.Sprintf("%su=%s&", queryURL, endpoints[endpoint])
 		}
 
 		//request start time
-		//here latency is negligible
+		//here latency and request construction
+		//are negligible
 		start := time.Now()
 
-		//make a query to the API server
 		res, err := http.Get(queryURL)
 		if err != nil {
 			log.Fatalf("e2e error: %v", err)
 		}
 		defer res.Body.Close()
 
-		//make sure query is successful
 		if res.StatusCode != 200 {
 			log.Fatalf("e2e error. Status code: %d", res.StatusCode)
 		}

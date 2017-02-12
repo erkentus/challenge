@@ -32,7 +32,7 @@ type Aggregator struct {
 	sync.WaitGroup
 }
 
-// merge thread safe method to merge new data into data field
+// merge thread safe method to merge new set of numbers into data field
 func (a *Aggregator) merge(d Data) error {
 	a.Lock()
 	defer a.Unlock()
@@ -101,19 +101,19 @@ func handler(res http.ResponseWriter, req *http.Request) {
 			aggr.Add(1)
 			go func() {
 				defer aggr.Done()
-				aggr.fetchData(ctx, endpoint) //fetch the data from endpoint
+				err := aggr.fetchData(ctx, endpoint) //fetch the data from endpoint
+				if err != nil {
+					log.Printf("[Error] Fetching data from %s, error: %v", endpoint.String(), err)
+				}
 			}()
 		}
 		aggr.Wait()
 		done <- struct{}{}
 	}()
 
-	// block until either timeout or all requests are finished
 	select {
-	case <-ctx.Done():
-		log.Printf("one of the requests timed out!")
-	case <-done:
-		log.Printf("all endpoints are processed!")
+	case <-ctx.Done(): //timeout
+	case <-done: //all requests were either finished or failed
 	}
 
 	res.Header().Set("Content-Type", "application/json")
@@ -126,30 +126,24 @@ func handler(res http.ResponseWriter, req *http.Request) {
 func (a *Aggregator) fetchData(ctx context.Context, endpoint *url.URL) error {
 	req, err := http.NewRequest("GET", endpoint.String(), nil)
 	if err != nil {
-		log.Printf("[Error] Endpoint request creation failed: %v\n", err)
 		return errUnknown
 	}
 	// pass the context to the http client
-	// only possible since go1.7
 	res, err := http.DefaultClient.Do(req.WithContext(ctx))
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			log.Printf("[Error] Request took too long: %s", endpoint.String())
 			return errRequestTookTooLong
 		}
-		log.Printf("[Error] Failed to make a request %v\n", err)
 		return errServerUnavailable
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != 200 {
-		log.Printf("[Error] Unexpected status from %s: %s", endpoint.String(), res.Status)
 		return errUnexpectedResponse
 	}
 
 	var numbers Data
 	if err = json.NewDecoder(res.Body).Decode(&numbers); err != nil {
-		log.Printf("[Error] Failed to parse JSON response. Error: %v\n", err)
 		return errUnexpectedResponse
 	}
 
